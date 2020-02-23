@@ -3,20 +3,23 @@ const express = require('express')
 const bodyParser = require('body-parser');
 const request = require('request');
 
-const app = express()
+const app = express();
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
-// Called on Pull Request Approved trigger in bitbucket
+// called on 'Pull Request Approved' trigger in bitbucket
 app.post('/pr_approved', (req, res) => {
     if (!req || !req.body || !req.body.pullrequest) {
         console.log('request is invalid');
         res.status(400).send('request is invalid');
         return;
     }
+
+    // A user approves a pull request for a repository.
     // {pullrequest}: The approved pull request.
     // {participants}: A list of participants part of the pull request.
-    // {title}: The name of the pull request. 
+    // {title}: The name of the pull request.
+    // see event payloads doc for more - https://confluence.atlassian.com/bitbucket/event-payloads-740262817.html
     const { participants, title } = req.body.pullrequest;
 
     if (participants.filter(p => p.approved).length < 1) {
@@ -32,28 +35,34 @@ app.post('/pr_approved', (req, res) => {
         return;
     }
 
-    requestToJira(res, config.jira.statuses.prApproved, findQaAssignee(issueId));
+    updateJiraIssue({
+        res,
+        issueId,
+        statusId: config.jira.statuses.prApproved,
+    });
 });
 
-// Called on any push to repo in bitbucket
+// called on any push to repo in bitbucket
 app.post('/merged', (req, res) => {
     if (!req || !req.body || !req.body.push) {
         console.log('request is invalid');
         res.status(400).send('request is invalid');
         return;
     }
+
     // The details of the push, which includes the changes property. 
     // {new}: An object containing information about the state of the reference after the push. 
     // When a branch is deleted, new is null
     // {name}: The name of the branch, tag, named branch, or bookmark.
     // {target}: The details of the most recent commit after the push.
+    // see event payloads doc for more - https://confluence.atlassian.com/bitbucket/event-payloads-740262817.html
     const push = req.body.push;
 
     if (push.changes.length === 1 && push.changes[0].new 
         && push.changes[0].new.target && push.changes[0].new.target.type === 'commit'
         // check if it was commit to dev or feature branch
-        && (config.plutora.dev_branches.includes(push.changes[0].new.target.name) 
-            || push.changes[0].new.target.name.startsWith(config.plutora.feature_branch_prefix))
+        && (config.plutora.dev_branches.includes(push.changes[0].new.name) 
+            || push.changes[0].new.name.startsWith(config.plutora.feature_branch_prefix))
         // check if it was 'merge' commit
         && push.changes[0].new.target.message.startsWith('Merged in '))
     {
@@ -65,7 +74,13 @@ app.post('/merged', (req, res) => {
             return;
         }
 
-        requestToJira(res, config.jira.statuses.merged);
+        updateJiraIssue({
+            res,
+            issueId,
+            statusId: config.jira.statuses.merged,
+            assignee: findQaAssignee(issueId),
+        });
+        return;
     }
 
     res.status(202).send('no merges have been detected');
@@ -77,17 +92,38 @@ const parseIssueId = (text) => {
     return matchesArray.length !== 1 ? null : matchesArray[0];
 }
 
-const requestToJira = (res, statusId, assignee) => {
-    const bodyData = `{
-        "transition": {
-            "id": ${statusId} 
-        },
-        ${assignee ? `"fields": {"assignee": {"name": "${assignee}"}}` : ''}
-    }`;
-
-    const options = {
+const updateJiraIssue = (params) => {
+    const { res, issueId, statusId, assignee } = params;
+    requestToJira({
+        res,
         method: 'POST',
         url: `${config.jira.url}/rest/api/3/issue/${issueId}/transitions`,
+        bodyData: `{
+            "transition": {
+                "id": ${statusId} 
+            }
+        }`,
+        callback: assignee ? 
+            () => { 
+                requestToJira({
+                    res,
+                    method: 'PUT',
+                    url: `${config.jira.url}/rest/api/3/issue/${issueId}/assignee`,
+                    bodyData : `{
+                        "accountId": "${assignee.id}"
+                    }`
+                })
+            }
+            : null
+    });
+}
+
+const requestToJira = (params) => {
+    const { res, method, url, bodyData, callback } = params;
+
+    const options = {
+        method,
+        url,
         auth: { username: config.creds.username, password: config.creds.apiToken },
         headers: {
         'Accept': 'application/json',
@@ -102,7 +138,13 @@ const requestToJira = (res, statusId, assignee) => {
             'Response: ' + response.statusCode + ' ' + response.statusMessage
         );
         console.log(body);
-        res.sendStatus(response.statusCode);
+        
+        if (callback) {
+            callback()
+        } else {
+            res.status(response.statusCode).send(response.statusMessage);
+        }
+        
     });
 }
 

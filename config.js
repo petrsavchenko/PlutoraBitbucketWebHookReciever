@@ -6,7 +6,7 @@ module.exports = {
     env: process.env.NODE_ENV || 'development',
     port: process.env.PORT || 3000,
     plutora: {
-        dev_branches: ['DEV-AQUAMARINE','DEV-RUBY'],
+        dev_branches: ['master','DEV-RUBY'],
         feature_branch_prefix: 'DEV-FEATURE-'
     },
     jira: {
@@ -14,10 +14,10 @@ module.exports = {
         issueRegEx: /((?<!([A-Z]{1,10})-?)[A-Z]+-\d+)/g, // official Jira Issue Reg Ex - https://confluence.atlassian.com/stashkb/integrating-with-custom-jira-issue-key-313460921.html?_ga=2.203384471.708255576.1582337364-28417654.1581479138
         statuses: {
             prApproved: 21,
-            merged: 11
+            merged: 31
         },
         qa: {
-            TEST: ['petr savchenko']
+            TEST: [{id: '5e4eff303011ed0c8f8b25a2', name: 'Petr Savchenko'}]
         }
     },
     creds: {
